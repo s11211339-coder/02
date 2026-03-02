@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 陀螺儀：物理顯示修正版</title>
+    <style>
+        /* 字體設定：優先使用支援數學符號的字體 */
+        body { 
+            margin: 0; overflow: hidden; background-color: #0f0f0f; 
+            font-family: "Segoe UI", "Roboto", "Helvetica Neue", "Arial", sans-serif; 
+            user-select: none; 
+        }
+        
+        /* 側邊欄設計 */
+        #sidebar {
+            position: absolute; top: 0; right: 0; bottom: 0;
+            width: 360px;
+            background: rgba(20, 20, 20, 0.95);
+            border-left: 1px solid #333;
+            padding: 20px;
+            box-shadow: -4px 0 20px rgba(0,0,0,0.8);
+            overflow-y: auto; color: #e0e0e0;
+            display: flex; flex-direction: column;
+            backdrop-filter: blur(5px);
+        }
+
+        h2 { margin: 0 0 15px 0; color: #ffcc00; font-size: 20px; text-align: center; border-bottom: 2px solid #444; padding-bottom: 10px; letter-spacing: 1px;}
+        h3 { margin: 20px 0 8px 0; color: #4db8ff; font-size: 14px; border-left: 4px solid #4db8ff; padding-left: 10px; text-transform: uppercase; letter-spacing: 1px;}
+
+        /* 儀表板區域 */
+        #dashboard {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid #444; border-radius: 6px; padding: 12px;
+            margin-bottom: 15px;
+        }
+        .dash-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; align-items: center; }
+        .dash-label { color: #aaa; }
+        
+        /* 數值與單位 */
+        .dash-val { font-family: 'Consolas', 'Monaco', monospace; font-weight: bold; font-size: 14px; color: #fff; }
+        .dash-unit { color: #777; font-size: 11px; margin-left: 4px; width: 55px; text-align: right;}
+        
+        .color-spin { color: #ffaa00; }
+        .color-L { color: #00ff00; }
+        .color-T { color: #ff00ff; }
+
+        /* 滑桿控制區 */
+        .control-group { margin-bottom: 12px; }
+        .control-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; color: #ccc; }
+        .unit-tag { color: #666; font-size: 11px; font-style: italic; }
+        
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #007bff; height: 4px; margin-top: 5px; }
+
+        .calc-info { 
+            font-size: 11px; color: #888; text-align: right; margin-top: 2px; 
+            font-family: 'Consolas', monospace; 
+        }
+
+        /* 按鈕 */
+        .btn-container { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px;
+            cursor: pointer; font-weight: bold; font-size: 13px; transition: 0.2s;
+        }
+        #btn-pause { background: #e0a800; color: #000; }
+        #btn-reset { background: #28a745; color: #fff; }
+
+        /* 3D 漂浮標籤 */
+        .float-label {
+            font-family: "Segoe UI", sans-serif;
+            padding: 4px 8px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 12px;
+            pointer-events: none;
+            box-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            line-height: 1.4;
+            min-width: 100px;
+        }
+        .float-title { font-weight: bold; font-size: 13px; display: block; margin-bottom: 2px;}
+        .float-val { font-family: 'Consolas', monospace; color: #fff; font-size: 13px;}
+        .float-unit { color: #aaa; font-size: 11px; }
+        
+        .border-L { border-left: 3px solid #00ff00; }
+        .border-T { border-left: 3px solid #ff00ff; }
+        .border-G { border-left: 3px solid #00ffff; }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>物理實驗室 Pro</h2>
+        
+        <div id="dashboard">
+            <div class="dash-row" style="border-bottom:1px solid #444; padding-bottom:5px; margin-bottom:8px;">
+                <span class="dash-label">系統狀態</span>
+                <span id="disp-status" style="font-weight:bold; color:#00ff00;">運行中</span>
+                <span></span>
+            </div>
+            
+            <div class="dash-row">
+                <span class="dash-label color-spin">自轉速度 (&omega;)</span>
+                <span id="disp-spin" class="dash-val">0.0</span>
+                <span class="dash-unit">rad/s</span>
+            </div>
+            <div class="dash-row">
+                <span class="dash-label">進動速度 (&Omega;)</span>
+                <span id="disp-precess" class="dash-val">0.00</span>
+                <span class="dash-unit">rad/s</span>
+            </div>
+            <div class="dash-row">
+                <span class="dash-label">傾斜角度 (&theta;)</span>
+                <span id="disp-theta" class="dash-val">0.0</span>
+                <span class="dash-unit">deg (&deg;)</span>
+            </div>
+            <div class="dash-row" style="margin-top:8px; padding-top:8px; border-top:1px dashed #444;">
+                <span class="dash-label color-L">角動量 (L)</span>
+                <span id="disp-L" class="dash-val">0.00</span>
+                <span class="dash-unit">kg&middot;m&sup2;/s</span>
+            </div>
+            <div class="dash-row">
+                <span class="dash-label color-T">重力矩 (&tau;)</span>
+                <span id="disp-T" class="dash-val">0.00</span>
+                <span class="dash-unit">N&middot;m</span>
+            </div>
+            <div class="dash-row">
+                <span class="dash-label">總能量 (E)</span>
+                <span id="disp-E" class="dash-val">0.0</span>
+                <span class="dash-unit">J</span>
+            </div>
+        </div>
+
+        <div class="btn-container">
+            <button id="btn-pause" onclick="togglePause()">暫停模擬</button>
+            <button id="btn-reset" onclick="resetSimulation()">重置系統</button>
+        </div>
+
+        <h3>1. 剛體幾何 (Geometry)</h3>
+        <div class="control-group">
+            <div class="control-header">
+                <span>質量 (M)</span>
+                <div><span id="val-mass" class="dash-val">2.0</span> <span class="unit-tag">kg</span></div>
+            </div>
+            <input type="range" id="inp-mass" min="0.1" max="10.0" step="0.1" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span>圓盤半徑 (R)</span>
+                <div><span id="val-radius" class="dash-val">0.50</span> <span class="unit-tag">m</span></div>
+            </div>
+            <input type="range" id="inp-radius" min="0.1" max="1.0" step="0.05" value="0.5">
+            <div class="calc-info">自轉慣量 I<sub>spin</sub>: <span id="calc-ispin">0.25</span> kg&middot;m&sup2;</div>
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span>質心桿長 (L)</span>
+                <div><span id="val-len" class="dash-val">1.0</span> <span class="unit-tag">m</span></div>
+            </div>
+            <input type="range" id="inp-len" min="0.2" max="2.0" step="0.1" value="1.0">
+            <div class="calc-info">橫向慣量 I<sub>trans</sub>: <span id="calc-itrans">2.12</span> kg&middot;m&sup2;</div>
+        </div>
+
+        <h3>2. 初始條件 (Initial)</h3>
+        <div class="control-group">
+            <div class="control-header">
+                <span>初始轉速 (&omega;<sub>0</sub>)</span>
+                <div><span id="val-init-spin" class="dash-val">50</span> <span class="unit-tag">rad/s</span></div>
+            </div>
+            <input type="range" id="inp-init-spin" min="0" max="150" value="50">
+        </div>
+        <div class="control-group">
+            <div class="control-header">
+                <span>初始傾角 (&theta;<sub>0</sub>)</span>
+                <div><span id="val-init-tilt" class="dash-val">30</span> <span class="unit-tag">deg</span></div>
+            </div>
+            <input type="range" id="inp-init-tilt" min="5" max="85" value="30">
+        </div>
+
+        <h3>3. 環境 (Environment)</h3>
+        <div class="control-group">
+            <div class="control-header">
+                <span>重力加速度 (g)</span>
+                <div><span id="val-g" class="dash-val">9.8</span> <span class="unit-tag">m/s&sup2;</span></div>
+            </div>
+            <input type="range" id="inp-g" min="0" max="20" step="0.1" value="9.8">
+        </div>
+        <div class="control-group">
+            <div class="control-header">
+                <span>摩擦係數 (Friction)</span>
+                <div><span id="val-fric" class="dash-val">0.05</span> <span class="unit-tag">係數</span></div>
+            </div>
+            <input type="range" id="inp-fric" min="0" max="0.5" step="0.01" value="0.05">
+        </div>
+    </div>
+
+    <script>
+        // --- 變數宣告 ---
+        let scene, camera, renderer, labelRenderer, controls;
+        let pivotGroup, gyroBody, shaftMesh, diskMesh;
+        let arrowL, arrowT, arrowG;
+        let trailLine, trailPos;
+        const TRAIL_LEN = 500;
+
+        // 物理參數 (Physical Parameters)
+        const p = {
+            M: 2.0, R: 0.5, L: 1.0, g: 9.8, friction: 0.05,
+            initSpin: 50, initTilt: 30,
+            
+            // 計算出的慣量
+            I_spin: 0, I_trans: 0,
+
+            // 動態變數
+            theta: 0, phi: 0, psi: 0,
+            dt: 0, dp: 0, ds: 0,
+            
+            paused: false, isFallen: false
+        };
+
+        window.onload = () => {
+            initScene();
+            bindUI();
+            recalcInertia();
+            resetSimulation();
+            animate();
+        };
+
+        function initScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+
+            camera = new THREE.PerspectiveCamera(45, (window.innerWidth-360)/window.innerHeight, 0.1, 100);
+            camera.position.set(5, 3, 5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth-360, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            labelRenderer = new THREE.CSS2DRenderer();
+            labelRenderer.setSize(window.innerWidth-360, window.innerHeight);
+            labelRenderer.domElement.style.position = 'absolute';
+            labelRenderer.domElement.style.top = '0px';
+            document.body.appendChild(labelRenderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
+            controls.target.set(0, 1, 0);
+            controls.enableDamping = true;
+
+            scene.add(new THREE.AmbientLight(0x333333));
+            const light = new THREE.DirectionalLight(0xffffff, 1.2);
+            light.position.set(5, 10, 5);
+            light.castShadow = true;
+            scene.add(light);
+
+            scene.add(new THREE.GridHelper(10, 20, 0x555555, 0x222222));
+            const plane = new THREE.Mesh(new THREE.PlaneGeometry(20,20), new THREE.MeshPhongMaterial({color:0x1a1a1a, depthWrite:false}));
+            plane.rotation.x = -Math.PI/2;
+            plane.receiveShadow = true;
+            scene.add(plane);
+
+            pivotGroup = new THREE.Group();
+            scene.add(pivotGroup);
+            gyroBody = new THREE.Group();
+            pivotGroup.add(gyroBody);
+
+            const matShaft = new THREE.MeshStandardMaterial({color: 0xcccccc, roughness: 0.4});
+            const matDisk = new THREE.MeshStandardMaterial({color: 0xffaa00, roughness: 0.2, metalness: 0.6});
+
+            shaftMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1, 16), matShaft);
+            shaftMesh.castShadow = true;
+            gyroBody.add(shaftMesh);
+
+            diskMesh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.15, 32), matDisk);
+            diskMesh.castShadow = true;
+            gyroBody.add(diskMesh);
+            diskMesh.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 1.8), new THREE.MeshBasicMaterial({color:0xff4400})));
+
+            // 建立向量箭頭與標籤
+            arrowL = createVectorArrow(0x00ff00, "border-L");
+            arrowT = createVectorArrow(0xff00ff, "border-T");
+            arrowG = createVectorArrow(0x00ffff, "border-G");
+
+            const tGeo = new THREE.BufferGeometry();
+            trailPos = new Float32Array(TRAIL_LEN * 3);
+            tGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+            trailLine = new THREE.Line(tGeo, new THREE.LineBasicMaterial({color: 0xffffff, opacity: 0.3, transparent:true}));
+            scene.add(trailLine);
+
+            window.addEventListener('resize', onResize);
+        }
+
+        function createVectorArrow(color, cssClass) {
+            const arr = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(), 1, color, 0.2, 0.1);
+            const line = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1, 8), new THREE.MeshBasicMaterial({color:color}));
+            line.geometry.translate(0, 0.5, 0);
+            arr.add(line);
+            arr.fatLine = line;
+
+            // 標籤內容 (初始)
+            const div = document.createElement('div');
+            div.className = `float-label ${cssClass}`;
+            div.innerHTML = `<span class="float-title">Title</span><span class="float-val">0</span>`;
+            const labelObj = new THREE.CSS2DObject(div);
+            arr.add(labelObj);
+
+            scene.add(arr);
+            return { arrow: arr, label: div, fatLine: line };
+        }
+
+        function bindUI() {
+            const inputs = [
+                ['mass', 'M', recalcInertia],
+                ['radius', 'R', () => { recalcInertia(); updateGeometry(); }],
+                ['len', 'L', () => { recalcInertia(); updateGeometry(); }],
+                ['g', 'g', null],
+                ['fric', 'friction', null],
+                ['init-spin', 'initSpin', null],
+                ['init-tilt', 'initTilt', null]
+            ];
+
+            inputs.forEach(item => {
+                const [id, prop, callback] = item;
+                const el = document.getElementById('inp-' + id);
+                const disp = document.getElementById('val-' + id);
+                el.addEventListener('input', (e) => {
+                    const val = parseFloat(e.target.value);
+                    p[prop] = val;
+                    disp.innerText = val;
+                    if(callback) callback();
+                });
+            });
+        }
+
+        function recalcInertia() {
+            p.I_spin = 0.5 * p.M * p.R * p.R;
+            p.I_trans = (0.25 * p.M * p.R * p.R) + (p.M * p.L * p.L);
+
+            document.getElementById('calc-ispin').innerText = p.I_spin.toFixed(3);
+            document.getElementById('calc-itrans').innerText = p.I_trans.toFixed(3);
+        }
+
+        function updateGeometry() {
+            diskMesh.scale.set(p.R, 1, p.R);
+            diskMesh.position.y = p.L;
+            const shaftLen = p.L * 1.3;
+            shaftMesh.scale.set(1, shaftLen, 1);
+            shaftMesh.position.y = shaftLen / 2;
+        }
+
+        function resetSimulation() {
+            p.theta = p.initTilt * Math.PI / 180;
+            p.phi = 0;
+            p.psi = 0;
+            p.ds = p.initSpin;
+            p.dt = 0;
+            
+            if (p.ds > 1) {
+                p.dp = (p.M * p.g * p.L) / (p.I_spin * p.ds);
+            } else {
+                p.dp = 0;
+            }
+
+            p.paused = false;
+            p.isFallen = false;
+            trailPos.fill(0);
+            trailLine.geometry.attributes.position.needsUpdate = true;
+            
+            updateStatus("運行中", "#00ff00");
+            document.getElementById('btn-pause').innerText = "暫停模擬";
+            updateGeometry();
+        }
+
+        function updateStatus(text, color) {
+            const el = document.getElementById('disp-status');
+            el.innerText = text;
+            el.style.color = color;
+        }
+
+        function togglePause() {
+            p.paused = !p.paused;
+            if(p.paused) {
+                updateStatus("已暫停", "#ffc107");
+                document.getElementById('btn-pause').innerText = "繼續模擬";
+            } else {
+                updateStatus(p.isFallen?"已倒下":"運行中", p.isFallen?"#ff4444":"#00ff00");
+                document.getElementById('btn-pause').innerText = "暫停模擬";
+            }
+        }
+
+        function stepPhysics(dt) {
+            if(p.paused || p.isFallen) return;
+
+            if(p.theta >= Math.PI/2) {
+                p.theta = Math.PI/2;
+                p.isFallen = true;
+                updateStatus("已倒下", "#ff4444");
+                return;
+            }
+
+            const sinT = Math.sin(p.theta);
+            const cosT = Math.cos(p.theta);
+
+            p.ds -= p.friction * 0.5 * dt * p.ds;
+            const tiltDrag = p.friction * 2.0 * p.dt;
+
+            const torqueMag = p.M * p.g * p.L * sinT;
+
+            const num_theta = (p.I_trans * p.dp * p.dp * sinT * cosT) 
+                            - (p.I_spin * (p.dp * cosT + p.ds) * p.dp * sinT) 
+                            + torqueMag - tiltDrag;
+            const dd_theta = num_theta / p.I_trans;
+
+            const num_phi = (p.I_spin * (p.ds + p.dp * cosT) * p.dt) 
+                          - (2 * p.I_trans * p.dp * p.dt * cosT);
+            const den_phi = p.I_trans * sinT;
+            const dd_phi = (Math.abs(sinT) > 0.001) ? (num_phi / den_phi) : 0;
+
+            p.dt += dd_theta * dt;
+            p.dp += dd_phi * dt;
+            p.theta += p.dt * dt;
+            p.phi += p.dp * dt;
+            p.psi += p.ds * dt;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            const dt = 0.016; 
+            if(!p.paused) {
+                for(let i=0; i<8; i++) stepPhysics(dt/8);
+            }
+
+            pivotGroup.rotation.set(0, 0, 0);
+            pivotGroup.rotateY(p.phi);
+            pivotGroup.rotateX(p.theta);
+            gyroBody.rotation.y = p.psi;
+
+            const axis = new THREE.Vector3(
+                Math.sin(p.theta) * Math.sin(p.phi),
+                Math.cos(p.theta),
+                Math.sin(p.theta) * Math.cos(p.phi)
+            );
+            const cmPos = axis.clone().multiplyScalar(p.L);
+            const downVec = new THREE.Vector3(0,-1,0);
+
+            const L_val = p.I_spin * p.ds;
+            const Torque_val = p.M * p.g * p.L * Math.sin(p.theta);
+            const Energy_val = (0.5 * p.I_spin * p.ds**2) + (0.5 * p.I_trans * (p.dt**2 + p.dp**2 * Math.sin(p.theta)**2)) + (p.M * p.g * p.L * Math.cos(p.theta));
+
+            // 更新標籤 (使用 HTML Entities 避免亂碼)
+            const vScale = 0.2 / Math.sqrt(p.M); 
+            const L_len = Math.min(L_val * vScale, 5);
+            arrowL.arrow.setDirection(axis);
+            arrowL.arrow.setLength(Math.max(L_len, 0.2));
+            arrowL.fatLine.scale.set(1, Math.max(L_len, 0.2), 1);
+            arrowL.label.innerHTML = 
+                `<span class="float-title" style="color:#0f0">角動量 L</span>` +
+                `<span class="float-val">${L_val.toFixed(2)}</span> <span class="float-unit">kg&middot;m&sup2;/s</span>`;
+
+            const G_force = p.M * p.g;
+            arrowG.arrow.position.copy(cmPos);
+            arrowG.arrow.setDirection(downVec);
+            const G_len = Math.min(G_force * 0.1, 3);
+            arrowG.arrow.setLength(Math.max(G_len, 0.4));
+            arrowG.fatLine.scale.set(1, Math.max(G_len, 0.4), 1);
+            arrowG.label.innerHTML = 
+                `<span class="float-title" style="color:#0ff">重力 Mg</span>` +
+                `<span class="float-val">${G_force.toFixed(1)}</span> <span class="float-unit">N</span>`;
+
+            const tipPos = axis.clone().multiplyScalar(L_len);
+            arrowT.arrow.position.copy(tipPos);
+            const torqueDir = new THREE.Vector3().crossVectors(cmPos, downVec).normalize();
+            const T_len = Torque_val * vScale * 3;
+            arrowT.arrow.setDirection(torqueDir);
+            arrowT.arrow.setLength(Math.max(T_len, 0.1));
+            arrowT.fatLine.scale.set(1, Math.max(T_len, 0.1), 1);
+            arrowT.label.innerHTML = 
+                `<span class="float-title" style="color:#f0f">重力矩 &tau;</span>` +
+                `<span class="float-val">${Torque_val.toFixed(2)}</span> <span class="float-unit">N&middot;m</span>`;
+
+            const tHead = axis.clone().multiplyScalar(p.L * 1.5);
+            for(let i=0; i<TRAIL_LEN-1; i++) {
+                trailPos[i*3] = trailPos[(i+1)*3];
+                trailPos[i*3+1] = trailPos[(i+1)*3+1];
+                trailPos[i*3+2] = trailPos[(i+1)*3+2];
+            }
+            trailPos[(TRAIL_LEN-1)*3] = tHead.x;
+            trailPos[(TRAIL_LEN-1)*3+1] = tHead.y;
+            trailPos[(TRAIL_LEN-1)*3+2] = tHead.z;
+            trailLine.geometry.attributes.position.needsUpdate = true;
+
+            document.getElementById('disp-spin').innerText = p.ds.toFixed(1);
+            document.getElementById('disp-precess').innerText = p.dp.toFixed(2);
+            document.getElementById('disp-theta').innerText = (p.theta * 180 / Math.PI).toFixed(1);
+            document.getElementById('disp-L').innerText = L_val.toFixed(2);
+            document.getElementById('disp-T').innerText = Torque_val.toFixed(2);
+            document.getElementById('disp-E').innerText = Energy_val.toFixed(1);
+
+            renderer.render(scene, camera);
+            labelRenderer.render(scene, camera);
+        }
+
+        function onResize() {
+            const w = window.innerWidth - 360;
+            const h = window.innerHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+            labelRenderer.setSize(w, h);
+        }
+    </script>
+</body>
+</html>
